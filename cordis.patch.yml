@@ -1,0 +1,11 @@
+# dsh-voice-ears — 把插件插进 harness 配置树。
+# 和其它 bundle patch 同一形状：一条 insert，`name` 从 profile 的 node_modules 解析。
+#
+# 本地开发时用链接安装：
+#   node --expose-internals "<DSH>/resources/app/lib/plugin-cli.js" desktop install <这个目录>
+#
+# 首次调用 ears_transcribe 时如果环境不对，工具会返回一条能照着做的提示
+# （缺 faster-whisper / 缺 CUDA 运行库 / 路径不对），不会静默失败。
+- insert:
+    - id: dsh-voice-ears
+      name: dsh-voice-ears

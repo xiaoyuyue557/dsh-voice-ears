@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Voice ears">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f2a3d"/>
+      <stop offset="1" stop-color="#123b52"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#5ad1c8"/>
+      <stop offset="1" stop-color="#8ee6ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <!-- 耳朵：外轮廓 -->
+  <path d="M52 96c0-9-8-13-8-25 0-17 12-29 28-29s27 12 27 28c0 15-10 22-10 32"
+        fill="none" stroke="url(#ink)" stroke-width="7" stroke-linecap="round"/>
+  <!-- 耳廓内侧 -->
+  <path d="M64 74c0-7 5-12 11-12s10 5 10 11c0 7-5 9-5 15"
+        fill="none" stroke="url(#ink)" stroke-width="6" stroke-linecap="round" opacity="0.75"/>
+  <!-- 声波：进来的声音 -->
+  <path d="M32 46a26 26 0 0 1 0 36" fill="none" stroke="#8ee6ff" stroke-width="5"
+        stroke-linecap="round" opacity="0.55"/>
+  <path d="M22 38a40 40 0 0 1 0 52" fill="none" stroke="#8ee6ff" stroke-width="5"
+        stroke-linecap="round" opacity="0.3"/>
+</svg>

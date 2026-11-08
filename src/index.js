@@ -9,6 +9,7 @@
  * 用户看到的应该是"缺 CUDA 运行库，装这个或改成 cpu"，而不是一段 stack trace。
  */
 import { transcribeSpec, statusSpec } from './tools.js';
+import { stopWorker } from './worker.js';
 
 export const name = 'dsh-voice-ears';
 export const inject = ['tools'];
@@ -41,6 +42,9 @@ export async function apply(ctx) {
   register(statusSpec());
 
   return () => {
+    // 插件被卸载/重载时把这双耳朵收起来：常驻的 Python worker 占着显存，
+    // 不主动停就会被留成孤儿进程（用户看不到、还以为耳机还在听）。
+    try { stopWorker('plugin-dispose'); } catch { /* ignore */ }
     for (const dispose of disposers.reverse()) {
       try { dispose?.(); } catch { /* ignore */ }
     }

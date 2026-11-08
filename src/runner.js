@@ -1,20 +1,21 @@
 /**
- * runner.js — 起一个 Python 进程，把音频喂给它，拿回「文字 + 判定」。
+ * runner.js — 转写的两条路。
  *
- * 0.0.1 是每次调用起一次进程：简单、不会泄漏、不占常驻内存。
- * 代价是每次都要重新加载模型（实测 medium 在 4060 上约 5.6 秒）。
- * v0.1 会换成常驻服务，那一步的必要性就是这 5.6 秒。
+ *   热路径（默认）：常驻 worker，模型只加载一次，之后每条 ~1.7 秒。
+ *   冷路径：一次性进程，模型每次重载（~7.4 秒）。用于 worker 起不来时的兜底，
+ *           以及"这次调用要换模型/换设备"的场合——那必须重载，常驻没意义。
  *
- * 通信协议见 python/transcribe.py 顶部注释：stdin 一行 JSON，stdout 一行 JSON。
+ * 两条路的判定完全一样，因为都在 python/ears_core.py 里，不是两套代码。
  */
 import { spawn } from 'node:child_process';
+import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { load, modelRef, pickPython } from './config.js';
 import { EarsError, toWav } from './media.js';
+import { PLUGIN_ROOT } from './paths.js';
+import { ensureWorker, workerStatus } from './worker.js';
 
-export const PLUGIN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+export { PLUGIN_ROOT };
 export const SCRIPT = join(PLUGIN_ROOT, 'python', 'transcribe.py');
 
 function childEnv(cfg, env) {
@@ -24,7 +25,8 @@ function childEnv(cfg, env) {
   return next;
 }
 
-function runPython(python, payload, { cfg, env, signal, timeoutMs }) {
+/** 冷路径：起一个进程，跑完就退。 */
+function runOnce(python, payload, { cfg, env, signal, timeoutMs }) {
   return new Promise((resolvePromise, reject) => {
     let child;
     try {
@@ -105,10 +107,13 @@ function runPython(python, payload, { cfg, env, signal, timeoutMs }) {
   });
 }
 
+/** worker 起不来时可以回退到冷路径的错误码。单条转写失败（文件坏了等）不该回退。 */
+const FALLBACK_CODES = new Set(['worker_spawn_failed', 'worker_timeout', 'worker_init_failed', 'worker_exited']);
+
 /**
  * 转写一个音频文件。
  *
- * @param {string} input 音频路径（wav/mp3/m4a/ogg/amr/flac…）
+ * @param {string} input 音频路径（wav/mp3/m4a/ogg/amr/flac/silk…）
  * @param {{language?: string, model?: string, device?: string, prompt?: string,
  *          signal?: AbortSignal, env?: object}} [opts]
  */
@@ -131,18 +136,49 @@ export async function transcribe(input, opts = {}) {
   try {
     const payload = {
       audio: media.path,
-      model: opts.model || modelRef(cfg),
       language: opts.language || cfg.language || 'auto',
-      device: opts.device || cfg.device,
-      compute: cfg.compute,
       prompt: opts.prompt || cfg.prompt || '',
       maxSeconds: cfg.maxSeconds,
       thresholds: cfg.thresholds,
     };
-    const result = await runPython(picked.python, payload, {
-      cfg, env, signal: opts.signal, timeoutMs: cfg.timeoutMs,
-    });
-    return { ...result, source: media.kind.label, python: picked.python };
+    const base = { source: media.kind.label, python: picked.python };
+
+    // 换模型/换设备必须重载模型，常驻反而更慢——这种调用直接走冷路径。
+    const overridesModel = Boolean(opts.model || opts.device);
+    if (cfg.resident !== false && !overridesModel) {
+      let fallbackReason = null;
+      const wasRunning = workerStatus(cfg).running;
+      try {
+        const worker = await ensureWorker({ cfg, env });
+        const result = await worker.transcribe(payload, { signal: opts.signal, timeoutMs: cfg.timeoutMs });
+        // coldStart：这次调用顺手把模型装上了。给渲染层用——否则首条会显示 1.7 秒，
+        // 用户以为一直是这么慢，其实那 5.5 秒加载被算在了别处。
+        return { ...result, ...base, mode: 'resident', coldStart: !wasRunning };
+      } catch (error) {
+        if (!FALLBACK_CODES.has(error?.code)) throw error;
+        fallbackReason = error;
+      }
+      const result = await runOnce(picked.python, {
+        ...payload,
+        model: modelRef(cfg),
+        device: cfg.device,
+        compute: cfg.compute,
+      }, { cfg, env, signal: opts.signal, timeoutMs: cfg.timeoutMs });
+      return {
+        ...result,
+        ...base,
+        mode: 'oneshot',
+        fallbackReason: fallbackReason ? fallbackReason.message : undefined,
+      };
+    }
+
+    const result = await runOnce(picked.python, {
+      ...payload,
+      model: opts.model || modelRef(cfg),
+      device: opts.device || cfg.device,
+      compute: cfg.compute,
+    }, { cfg, env, signal: opts.signal, timeoutMs: cfg.timeoutMs });
+    return { ...result, ...base, mode: 'oneshot' };
   } finally {
     media.cleanup?.();
   }
@@ -164,6 +200,9 @@ export async function environment({ env = process.env } = {}) {
     device: cfg.device,
     compute: cfg.compute,
     language: cfg.language,
+    resident: cfg.resident !== false,
+    idleSeconds: cfg.idleSeconds,
+    worker: workerStatus(cfg),
     ffmpeg: cfg.ffmpeg || process.env.DSH_FFMPEG_PATH || 'PATH 里的 ffmpeg',
     configPath: join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh', 'voice-ears.json'),
     script: SCRIPT,

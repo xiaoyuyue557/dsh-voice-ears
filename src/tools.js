@@ -8,6 +8,15 @@
 import { transcribe, environment } from './runner.js';
 import { basename } from 'node:path';
 
+/**
+ * 工具返回值必须是无损 JSON：带 undefined 的键会让注册层直接判无效
+ * （症状是 "returned invalid output: value is not lossless JSON"）。
+ * 走一趟 JSON 往返，顺手把 undefined 掉干净。
+ */
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 const OUTPUT = {
   schema: {
     type: 'object',
@@ -46,7 +55,13 @@ const OUTPUT = {
     if (value.language) bits.push(value.language);
     if (value.device) bits.push(`${value.device}/${value.compute ?? '?'}`);
     if (value.duration) bits.push(`音频 ${value.duration}s`);
-    if (value.elapsed) bits.push(`耗时 ${value.elapsed}s`);
+    if (value.elapsed) {
+      if (value.coldStart && value.loadSeconds) {
+        bits.push(`耗时 ${(value.elapsed + value.loadSeconds).toFixed(1)}s（首次，含模型加载 ${value.loadSeconds}s）`);
+      } else {
+        bits.push(`耗时 ${value.elapsed}s`);
+      }
+    }
     lines.push(`（${bits.join(' · ')}）`);
     return [{ type: 'text', text: lines.join('\n') }];
   },
@@ -103,7 +118,7 @@ export function transcribeSpec() {
         prompt: args.prompt,
         signal: exec?.signal,
       });
-      return {
+      return plain({
         verdict: result.verdict,
         text: result.text ?? '',
         partialText: result.partialText ?? '',
@@ -117,9 +132,13 @@ export function transcribeSpec() {
         device: result.device,
         compute: result.compute,
         model: result.model,
+        mode: result.mode,
+        coldStart: result.coldStart,
+        decodeSeconds: result.decodeSeconds,
+        loadSeconds: result.loadSeconds,
         source: result.source,
         segments: result.segments,
-      };
+      });
     },
   };
 }
@@ -147,6 +166,12 @@ export function statusSpec() {
         }
         lines.push(`模型：${value.model}${value.modelLooksLocal ? '（本地目录）' : '（首次调用会下载）'}`);
         lines.push(`设备：${value.device} / ${value.compute}`);
+        const w = value.worker ?? {};
+        if (w.running) {
+          lines.push(`常驻 worker：运行中（pid ${w.pid} · ${w.device}/${w.compute} · 已跑 ${w.uptimeSeconds}s · 闲置 ${w.idleSecondsLeft}s 后退出）`);
+        } else {
+          lines.push(`常驻 worker：未运行（下次调用自动启动，首次要等约 ${value.pythonDetail?.ok ? '6' : '?'} 秒加载模型）`);
+        }
         lines.push(`ffmpeg：${value.ffmpeg}`);
         lines.push(`配置：${value.configPath}`);
         if (!value.ok && value.tried?.length) {
@@ -161,7 +186,7 @@ export function statusSpec() {
     presentCall: (args) => ({ card: 'generic', title: 'check ears', kind: 'read', rawInput: args }),
     async execute() {
       const env = await environment();
-      return { ...env, script: basename(env.script) };
+      return plain({ ...env, script: basename(env.script) });
     },
   };
 }

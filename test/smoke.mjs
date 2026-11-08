@@ -7,13 +7,15 @@
  *
  * 跑法：npm test（需要 ~/.dsh/voice-ears.json 里的 python / modelDir 可用）
  * 覆盖：真语音要听清（wav / mp3 / silk 三条路）/ 静音要拒 / 白噪要拒 / 粉噪要拒
+ *      最后一条额外测"常驻是否真的省时间"（热路径应明显快于冷路径）。
  *
- * fixtures 里的音频是自己合成的（Windows SAPI 中文语音），没有第三方版权内容。
+ * fixtures 里的音频都是自己合成的（Windows SAPI 中文语音 + ffmpeg 生成的噪声），没有第三方版权内容。
  */
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { transcribe } from '../src/runner.js';
+import { stopWorker, workerStatus } from '../src/worker.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, 'fixtures');
@@ -36,8 +38,10 @@ for (const testCase of CASES) {
     console.log(`跳过 ${testCase.file}（fixture 不存在）`);
     continue;
   }
+  const started = Date.now();
   try {
     const result = await transcribe(path);
+    const wall = (Date.now() - started) / 1000;
     const verdictOk = testCase.expect.includes(result.verdict);
     const text = result.text || result.partialText || '';
     const textOk = !testCase.contains || text.includes(testCase.contains);
@@ -45,7 +49,7 @@ for (const testCase of CASES) {
     if (!ok) failed += 1;
     console.log(
       `${ok ? '✓' : '✗'} ${testCase.file.padEnd(12)} ${result.verdict.padEnd(10)} `
-      + `${String(result.elapsed ?? '?').padStart(5)}s  ${text.slice(0, 34)}`,
+      + `${String(result.mode ?? '-').padEnd(9)} ${wall.toFixed(2).padStart(5)}s  ${text.slice(0, 30)}`,
     );
     if (!verdictOk) console.log(`    期望 ${testCase.expect.join('/')}，实际 ${result.verdict}：${result.reason}`);
     if (!textOk) console.log(`    期望文字里含「${testCase.contains}」，实际「${text}」`);
@@ -53,6 +57,27 @@ for (const testCase of CASES) {
     failed += 1;
     console.log(`✗ ${testCase.file.padEnd(12)} 抛错：${error.message}${error.hint ? `\n    ${error.hint}` : ''}`);
   }
+}
+
+// 常驻到底有没有省时间：同一段音频再跑一次，热路径应该明显快。
+try {
+  const started = Date.now();
+  const warm = await transcribe(join(FIXTURES, 'speech.wav'));
+  const warmSeconds = (Date.now() - started) / 1000;
+  const status = workerStatus();
+  console.log(
+    `\n热路径：${warm.verdict} ${warmSeconds.toFixed(2)}s（decode ${warm.decodeSeconds}s）`
+    + ` · worker ${status.running ? '常驻中' : '未常驻'} · 模型加载 ${warm.loadSeconds}s`,
+  );
+  if (warm.mode === 'resident' && warmSeconds > 6) {
+    failed += 1;
+    console.log('✗ 常驻模式下热路径仍超过 6 秒，检查 worker 是否真的复用（可能每次都在重载模型）');
+  }
+} catch (error) {
+  failed += 1;
+  console.log(`✗ 热路径测试失败：${error.message}`);
+} finally {
+  stopWorker('smoke-done');
 }
 
 console.log(failed === 0 ? '\n全部通过' : `\n${failed} 条不符合预期`);

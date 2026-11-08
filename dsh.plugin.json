@@ -1,7 +1,7 @@
 {
   "name": "dsh-voice-ears",
   "description": "Local ears for DeepSeek Harness: transcribe incoming voice messages into text — including QQ/WeChat SILK voice notes — and say so when it did not hear clearly. Fully offline (faster-whisper / CTranslate2), no cloud, no torch needed.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "entry": {
     "name": "dsh-voice-ears",
     "inject": [

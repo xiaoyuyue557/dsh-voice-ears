@@ -1,7 +1,7 @@
 {
   "name": "dsh-voice-ears",
-  "version": "0.1.0",
-  "description": "给 DSH 里的 agent 装一双本地耳朵：把别人发来的语音（含 QQ 的 SILK 语音条）转成文字，并且在没听清的时候敢于说没听清。全离线、不上传，默认 whisper medium，不需要 torch。",
+  "version": "0.2.0",
+  "description": "给 DSH 里的 agent 装一双本地耳朵：把别人发来的语音（含 QQ 的 SILK 语音条）转成文字，并且在没听清的时候敢于说没听清。常驻 worker，模型只加载一次（之后每条约 1.6 秒）；全离线、不上传，不需要 torch。",
   "keywords": [
     "dsh",
     "dsh-plugin",

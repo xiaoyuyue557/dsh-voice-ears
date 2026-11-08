@@ -20,6 +20,8 @@ export const DEFAULTS = {
   compute: 'auto',   // auto | int8_float16 | float16 | int8 | float32
   ffmpeg: '',        // 空 = 用 PATH 里的 ffmpeg
   prompt: '',        // 给识别器的提示词（人名、黑话）
+  resident: true,    // true = 常驻 worker（模型只加载一次）；false = 每条语音起一个进程
+  idleSeconds: 600,  // 常驻 worker 闲置多久退出（秒）。退出后显存/内存归还
   maxSeconds: 600,   // 超过就不转（防止有人丢进来两小时播客）
   timeoutMs: 300000, // 单次调用上限
   extraPath: [],     // 额外塞进子进程 PATH 的目录（例如 torch\lib）
@@ -40,18 +42,28 @@ export function normalize(raw = {}) {
   merged.extraPath = Array.isArray(merged.extraPath) ? merged.extraPath.filter(Boolean) : [];
   merged.timeoutMs = clamp(Number(merged.timeoutMs) || DEFAULTS.timeoutMs, 5000, 3600000);
   merged.maxSeconds = clamp(Number(merged.maxSeconds) || DEFAULTS.maxSeconds, 1, 7200);
+  merged.idleSeconds = clamp(Number(merged.idleSeconds) || DEFAULTS.idleSeconds, 30, 86400);
+  merged.resident = merged.resident !== false;
   return merged;
 }
 
 export function load(env = process.env) {
+  const read = (file) => {
+    try {
+      // 记事本 / PowerShell 的 Set-Content -Encoding UTF8 会写 UTF-8 BOM，
+      // JSON.parse 遇到 BOM 直接抛错——然后就被 catch 吞掉、静默退回默认值。
+      // 用户改了配置却没生效，是这个插件最容易让人抓狂的故障，所以这里先剥 BOM。
+      const raw = readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+      return normalize(JSON.parse(raw));
+    } catch {
+      return null;
+    }
+  };
   if (env.DSH_VOICE_EARS_CONFIG && existsSync(env.DSH_VOICE_EARS_CONFIG)) {
-    try { return normalize(JSON.parse(readFileSync(env.DSH_VOICE_EARS_CONFIG, 'utf8'))); } catch { /* 落到默认 */ }
+    const fromEnv = read(env.DSH_VOICE_EARS_CONFIG);
+    if (fromEnv) return fromEnv;
   }
-  try {
-    return normalize(JSON.parse(readFileSync(CONFIG_PATH, 'utf8')));
-  } catch {
-    return normalize({});
-  }
+  return read(CONFIG_PATH) ?? normalize({});
 }
 
 export function save(patch = {}) {

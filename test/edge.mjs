@@ -7,7 +7,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { transcribe } from '../src/runner.js';
+import { stopEars, transcribe } from '../src/runner.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, 'fixtures');
@@ -35,6 +35,27 @@ for (const testCase of CASES) {
     console.log(`${codeOk && hintOk ? '✓' : '✗'} ${testCase.label.padEnd(12)} [${error.code}] ${String(error.message).split('\n')[0]}`);
     if (!hintOk) console.log('    缺少 hint（用户看到报错却不知道怎么办）');
   }
+}
+
+console.log(failed === 0 ? '报错路径全部通过' : `报错路径有 ${failed} 条不符合预期`);
+
+// ---------------------------------------------------------------- 回归：CPU 精度
+// 曾经的 bug：device=cpu 时 compute 还是 GPU 的 int8_float16，
+// ctranslate2 直接抛 "Requested int8_float16 compute type, but the target device ..."，
+// 表现为「改成 CPU 反而加载不了」。核心层现在会按设备把精度夹到合法值。
+// 这条慢（CPU 解码约 20 秒），但它是"用户改一个配置就全挂"的等级，值得留着。
+try {
+  const started = Date.now();
+  const result = await transcribe(join(FIXTURES, 'speech.wav'), { device: 'cpu' });
+  const seconds = ((Date.now() - started) / 1000).toFixed(1);
+  const ok = result.verdict === 'heard' && result.device === 'cpu' && result.compute === 'int8';
+  if (!ok) failed += 1;
+  console.log(`${ok ? '✓' : '✗'} device=cpu 兜底      ${result.verdict} ${result.device}/${result.compute} ${seconds}s`);
+} catch (error) {
+  failed += 1;
+  console.log(`✗ device=cpu 兜底      抛错：${error.message}`);
+} finally {
+  stopEars('edge-done');
 }
 
 console.log(failed === 0 ? '\n全部通过' : `\n${failed} 条不符合预期`);

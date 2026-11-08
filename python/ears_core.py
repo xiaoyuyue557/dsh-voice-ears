@@ -335,10 +335,24 @@ def _import_whisper():
 
 
 def _attempts(device: str, compute: str) -> list[tuple[str, str]]:
-    """auto → 先试 CUDA，再退 CPU。"""
+    """决定先试哪套 (device, compute)。
+
+    这里有一个必须收口的细节：CPU 后端不支持 int8_float16/float16。
+    用户把 device 写成 cpu、而 compute 还留着 GPU 默认值 int8_float16 时，
+    ctranslate2 会直接抛 "Requested int8_float16 compute type, but the target device ..."，
+    表现为"改成 CPU 反而加载不了"。所以按设备把精度夹到合法值。
+    """
+
+    def clamp_ok(dev: str, comp: str) -> str:
+        if dev == "cpu" and comp in ("int8_float16", "float16", "bfloat16"):
+            return "int8"
+        return comp
+
     if device == "auto":
-        return [("cuda", "int8_float16" if compute == "auto" else compute), ("cpu", "int8")]
-    return [(device, compute if compute != "auto" else ("int8_float16" if device == "cuda" else "int8"))]
+        cuda_comp = "int8_float16" if compute == "auto" else compute
+        return [("cuda", clamp_ok("cuda", cuda_comp)), ("cpu", "int8")]
+    comp = compute if compute != "auto" else ("int8_float16" if device == "cuda" else "int8")
+    return [(device, clamp_ok(device, comp))]
 
 
 def _friendly_model_error(joined: str) -> str:

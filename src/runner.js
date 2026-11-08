@@ -13,10 +13,15 @@ import { existsSync } from 'node:fs';
 import { load, modelRef, pickPython } from './config.js';
 import { EarsError, toWav } from './media.js';
 import { PLUGIN_ROOT } from './paths.js';
-import { ensureWorker, workerStatus } from './worker.js';
+import { ensureWorker, stopWorker, workerStatus } from './worker.js';
 
 export { PLUGIN_ROOT };
 export const SCRIPT = join(PLUGIN_ROOT, 'python', 'transcribe.py');
+
+/** 主动收工：给把本模块当库用的集成方（脚本、框架适配层）一个干净的退出方式。 */
+export function stopEars(reason = 'manual') {
+  stopWorker(reason);
+}
 
 function childEnv(cfg, env) {
   const next = { ...env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', KMP_DUPLICATE_LIB_OK: 'TRUE' };

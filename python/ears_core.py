@@ -211,7 +211,11 @@ def prompt_echo(text: str, prompt: str) -> bool:
     """模型把提示词本身复读出来了吗。
 
     这是 initial_prompt 的经典副作用：音频里没什么内容时，whisper 会接着提示词往下写。
-    实测中它把「以下是普通话的句子」原样吐了出来——不拦住就会当成人真的说了这句话。
+    实测两种形态都要拦：
+      1. 整段照抄——「以下是普通话的句子。」
+      2. **提示词碎片拼出来**——给了一串人名/术语后，听不清的音频上会吐出
+         「大肥鱼，本鱼，粤语，粤语，粤语…」（顺序还被它打乱，所以不能用"包含"判断）
+    第 2 种用二元组覆盖率判：文本里的相邻两字，八成以上都能在提示词里找到 → 就是在复读。
     """
     if not prompt or not text:
         return False
@@ -221,7 +225,75 @@ def prompt_echo(text: str, prompt: str) -> bool:
     t, p = norm(text), norm(prompt)
     if not t or not p:
         return False
-    return t in p or (len(p) >= 6 and p in t and len(t) <= len(p) * 1.5)
+    if t in p or (len(p) >= 6 and p in t and len(t) <= len(p) * 1.5):
+        return True
+    if len(t) < 6:
+        return False
+    prompt_bigrams = {p[i:i + 2] for i in range(len(p) - 1)}
+    grams = [t[i:i + 2] for i in range(len(t) - 1)]
+    if not grams:
+        return False
+    covered = sum(1 for g in grams if g in prompt_bigrams) / len(grams)
+    return covered >= 0.8
+
+
+def nonsense_repetition(text: str) -> tuple[str, int] | None:
+    """检出「单音节/小片段复读」——把人声的乱叫当成话的最主要来源。
+
+    真实数据（本机 21 条 QQ 语音条）里撞到的三个例子：
+      「哒」×42        —— 用户故意乱叫，5.1 秒
+      「鸟鸟鸟鸟」      —— 2.2 秒
+      「叭噶 叭噶」     —— 2.4 秒
+    这些音频的频谱特征**和真语音一模一样**（人在发声），置信度也一模一样
+    （avg_logprob -0.17，比正常语音的 -0.24 还高）。换句话说：任何基于
+    「模型有多确定」的判据都拦不住它们，只能看**文字的形状**。
+
+    判据：二元组（两个连续字）重复占据全文一半以上。中文正常句子几乎不会这样；
+    「谢谢谢谢」「好的好的」这类短的重复礼貌语因为长度不足 10 字会被放过（宁可漏，不可误杀）。
+
+    这个判据同时兜住了另一类事故：给了提示词时，模型在听不清的音频上会把提示词本身
+    复读成一长串（实测「大肥鱼，本鱼，粤语，粤语，粤语…」），也属于同一种形状。
+    """
+    import re
+
+    norm = re.sub(r"[\s\W_]+", "", text)
+    if len(norm) < 10:
+        return None
+    bigrams: dict[str, int] = {}
+    for i in range(len(norm) - 1):
+        gram = norm[i:i + 2]
+        bigrams[gram] = bigrams.get(gram, 0) + 1
+    top, count = max(bigrams.items(), key=lambda kv: kv[1])
+    if count * 2 / len(norm) >= 0.5:
+        return top, count
+    return None
+
+
+# 真人真的会说的短重复（道谢、应和、笑）。短复读判据必须放过这些，
+# 否则「谢谢谢谢」「对对对」会被当成乱叫——这比漏一条乱叫更让人恼火。
+COMMON_SHORT_REPEATS = (
+    "谢谢", "好的", "对对", "是是", "行行", "嗯嗯", "哈哈", "嘿嘿", "拜拜", "好好",
+    "收到", "知道", "可以", "没事", "加油", "晚安", "早", "嗯",
+)
+
+
+def short_repeat_gibberish(text: str) -> str | None:
+    """短句里的单字/双字复读——「鸟鸟鸟鸟」「叭噶 叭噶」这种。
+
+    为什么需要单独一条：长复读（≥10 字）由 nonsense_repetition 处理；但真实数据里
+    乱叫经常只有 3–5 个字，长度不够，只能靠「字太少、重复太多、又不是常用礼貌语」来判断。
+    代价是「快快快快」这类冷门重复会被误判——比把乱叫当事实转述出去要好。
+    """
+    import re
+
+    norm = re.sub(r"[\s\W_]+", "", text)
+    if not (3 <= len(norm) <= 7):
+        return None
+    if len(set(norm)) / len(norm) > 0.6:
+        return None
+    if any(word in norm for word in COMMON_SHORT_REPEATS):
+        return None
+    return norm
 
 
 def repeated_phrase(segments: list[dict]) -> tuple[str, int] | None:
@@ -285,6 +357,16 @@ def decide(*, text: str, segments: list[dict], duration: float, peak, flatness,
 
     if prompt_echo(text, prompt):
         return "no_speech", "模型只是把提示词复读了一遍——这段音频里没有它能抓住的话。"
+
+    nonsense = nonsense_repetition(text)
+    if nonsense:
+        return "no_speech", (f"同一小段「{nonsense[0]}」在 {len(text)} 个字里重复了 {nonsense[1]} 次——"
+                             f"像单音节或语气词，不是能当事实转述的句子。")
+
+    short = short_repeat_gibberish(text)
+    if short:
+        return "no_speech", (f"「{short}」的用字太单一（{len(set(short))} 种字 / {len(short)} 个字）——"
+                             f"更像是顺手发出的声音，而不是一句话。")
 
     loop = repeated_phrase(segments)
     if loop:

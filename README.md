@@ -1,5 +1,8 @@
 # dsh-voice-ears · 语音耳朵
 
+[![npm](https://img.shields.io/npm/v/dsh-voice-ears.svg)](https://www.npmjs.com/package/dsh-voice-ears)
+[![license](https://img.shields.io/npm/l/dsh-voice-ears.svg)](LICENSE)
+
 > 给 DSH 里的 agent 装一双**本地**耳朵：把别人发来的语音转成文字，**没听清的时候敢说没听清**。
 
 定位很窄，就一件事：**听得懂别人发的语音条**。
